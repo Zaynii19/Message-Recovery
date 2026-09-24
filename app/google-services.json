@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "998740253809",
+    "project_id": "message-recovery-deca7",
+    "storage_bucket": "message-recovery-deca7.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:998740253809:android:0bd0f13498a69cd29e4fd0",
+        "android_client_info": {
+          "package_name": "com.example.messagerecovery"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBdXW69opUkGs_P-Ji93XSXdG4jifSgkug"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
