@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlin.math.abs
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -47,7 +48,7 @@ class ConversationViewModel @Inject constructor(
                 val attachmentMap = attachments.associateBy { it.messageId }
 
                 val messageUiItems = messages.map { msg ->
-                    val attachedMedia = (attachmentMap[msg.id] ?: attachments.find { it.messageId == null && Math.abs(it.capturedTimestamp - msg.timestamp) < 5000L })?.let {
+                    val attachedMedia = (attachmentMap[msg.id] ?: attachments.find { it.messageId == null && abs(it.capturedTimestamp - msg.timestamp) < 5000L })?.let {
                         MediaAttachmentUiModel(
                             id = it.id,
                             mimeType = it.mimeType,
