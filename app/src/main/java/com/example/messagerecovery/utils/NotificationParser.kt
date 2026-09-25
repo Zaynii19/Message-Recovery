@@ -18,6 +18,8 @@ object NotificationParser {
     private val PROGRESS_PERCENT_REGEX = Regex("""^\d+%\s*\(.*left\)$""", RegexOption.IGNORE_CASE)
     private val FILE_SIZE_REGEX = Regex("""^\d+(\.\d+)?\s*(MB|KB|GB|B|bytes)$""", RegexOption.IGNORE_CASE)
     private val PURE_NUMBER_REGEX = Regex("""^\d+$""")
+    private val MESSAGE_COUNT_SUFFIX_REGEX = Regex("""\s*\(\d+\s*(?:new\s+)?messages?\)\s*$""", RegexOption.IGNORE_CASE)
+    private val NUMBER_IN_PARENS_SUFFIX_REGEX = Regex("""\s*\(\d+\)\s*$""")
 
     fun isTransferOrProgressText(text: String): Boolean {
         val trimmed = text.trim()
@@ -34,20 +36,64 @@ object NotificationParser {
                 lower == "instagram"
     }
 
-    fun extractSenderAndMessage(title: String, text: String): Pair<String, String> {
-        val trimmedTitle = title.trim()
+    /**
+     * Strips message count brackets like "(5 messages)" or "(2)" from group notification titles.
+     */
+    fun sanitizeThreadTitle(title: String): String {
+        var cleaned = title.trim()
+        cleaned = MESSAGE_COUNT_SUFFIX_REGEX.replace(cleaned, "")
+        cleaned = NUMBER_IN_PARENS_SUFFIX_REGEX.replace(cleaned, "")
+        return cleaned.trim()
+    }
+
+    /**
+     * Parses titles formatted as "Sender @ GroupName" in group notifications.
+     * Returns Pair(SenderName?, CleanGroupName).
+     */
+    fun extractSenderAndGroupTitle(title: String): Pair<String?, String> {
+        val sanitized = sanitizeThreadTitle(title)
+        if (sanitized.contains("@")) {
+            val parts = sanitized.split("@")
+            if (parts.size == 2) {
+                val potentialSender = parts[0].trim()
+                val potentialGroup = parts[1].trim()
+                if (potentialSender.isNotEmpty() && potentialGroup.isNotEmpty() && !isInvalidTitle(potentialSender)) {
+                    return Pair(potentialSender, potentialGroup)
+                }
+            }
+        }
+        return Pair(null, sanitized)
+    }
+
+    /**
+     * Splits sender from message text when formatted as "Sender: message" or "~ Sender: message".
+     */
+    fun extractSenderAndMessage(title: String, text: String, isGroup: Boolean = false): Pair<String, String> {
+        val trimmedTitle = sanitizeThreadTitle(title)
         val trimmedText = text.trim()
 
-        if (isGenericAppName(trimmedTitle)) {
+        val isGenericApp = isGenericAppName(trimmedTitle)
+        val startsWithTilde = trimmedText.startsWith("~")
+
+        // In group chats, summary notifications, or generic app titles: look for "Sender: message"
+        if (isGenericApp || isGroup || startsWithTilde) {
             val colonIndex = trimmedText.indexOf(':')
-            if (colonIndex in 1..<40) {
-                val potentialSender = trimmedText.substring(0, colonIndex).trim()
+            if (colonIndex in 1..<50) {
+                val rawPotentialSender = trimmedText.substring(0, colonIndex).trim()
                 val potentialMsg = trimmedText.substring(colonIndex + 1).trim()
-                if (potentialSender.isNotEmpty() && potentialMsg.isNotEmpty() && !isInvalidTitle(potentialSender)) {
+                val potentialSender = rawPotentialSender.removePrefix("~").trim()
+
+                if (potentialSender.isNotEmpty() &&
+                    potentialMsg.isNotEmpty() &&
+                    !potentialSender.contains('\n') &&
+                    !isInvalidTitle(potentialSender) &&
+                    !isTransferOrProgressText(potentialSender)
+                ) {
                     return Pair(potentialSender, potentialMsg)
                 }
             }
         }
+
         return Pair(trimmedTitle, trimmedText)
     }
 

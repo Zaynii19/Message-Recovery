@@ -98,16 +98,26 @@ class RecoveryNotificationListener : NotificationListenerService() {
             ?: extras.getCharSequence("android.title.big")?.toString()?.trim()
             ?: "Unknown"
 
-        val conversationTitle = if (!rawConvTitle.isNullOrEmpty()) rawConvTitle else rawTitle
+        val (senderFromTitle, groupFromTitle) = NotificationParser.extractSenderAndGroupTitle(rawTitle)
+        val conversationTitle = when {
+            !rawConvTitle.isNullOrEmpty() -> NotificationParser.sanitizeThreadTitle(rawConvTitle)
+            groupFromTitle.isNotBlank() -> groupFromTitle
+            else -> NotificationParser.sanitizeThreadTitle(rawTitle)
+        }
+
+        val messagingStyle = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
+        val isGroup = messagingStyle?.isGroupConversation == true ||
+                !rawConvTitle.isNullOrEmpty() ||
+                senderFromTitle != null
 
         // Attempt 1: AndroidX MessagingStyle extraction
-        val messagingStyle = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
         if (messagingStyle != null && messagingStyle.messages.isNotEmpty()) {
             val styleTitle = messagingStyle.conversationTitle?.toString()?.trim()
                 ?: conversationTitle
-            val threadTitle = if (NotificationParser.isGenericAppName(styleTitle)) {
-                messagingStyle.messages.firstOrNull()?.person?.name?.toString()?.trim() ?: styleTitle
-            } else styleTitle
+            val cleanStyleTitle = NotificationParser.sanitizeThreadTitle(styleTitle)
+            val threadTitle = if (NotificationParser.isGenericAppName(cleanStyleTitle)) {
+                messagingStyle.messages.firstOrNull()?.person?.name?.toString()?.trim() ?: cleanStyleTitle
+            } else cleanStyleTitle
 
             for (msg in messagingStyle.messages) {
                 val rawText = msg.text?.toString()?.trim() ?: ""
@@ -136,9 +146,10 @@ class RecoveryNotificationListener : NotificationListenerService() {
         // Attempt 2: Framework EXTRA_MESSAGES parcels (Native WhatsApp/AOSP MessagingStyle)
         val frameworkMessages = extractFrameworkMessages(extras, conversationTitle, sbn.postTime)
         if (frameworkMessages.isNotEmpty()) {
-            val threadTitle = if (NotificationParser.isGenericAppName(conversationTitle)) {
+            val cleanConvTitle = NotificationParser.sanitizeThreadTitle(conversationTitle)
+            val threadTitle = if (NotificationParser.isGenericAppName(cleanConvTitle)) {
                 frameworkMessages.first().senderName
-            } else conversationTitle
+            } else cleanConvTitle
 
             for (msg in frameworkMessages) {
                 if (NotificationParser.isNoiseNotification(packageName, msg.text)) {
@@ -161,17 +172,22 @@ class RecoveryNotificationListener : NotificationListenerService() {
         // Attempt 3: InboxStyle EXTRA_TEXT_LINES (Older bundles or group summaries)
         val textLines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
         if (!textLines.isNullOrEmpty()) {
+            val cleanConvTitle = NotificationParser.sanitizeThreadTitle(conversationTitle)
             for (line in textLines) {
                 val lineStr = line?.toString()?.trim() ?: continue
                 if (lineStr.isEmpty()) continue
-                val (lineSender, lineMsg) = NotificationParser.extractSenderAndMessage(conversationTitle, lineStr)
+                val (lineSender, lineMsg) = NotificationParser.extractSenderAndMessage(
+                    title = cleanConvTitle,
+                    text = lineStr,
+                    isGroup = isGroup
+                )
                 if (lineMsg.isEmpty() || NotificationParser.isNoiseNotification(packageName, lineMsg)) {
                     continue
                 }
 
                 handleMessageOrDeletion(
                     packageName = packageName,
-                    threadDisplayName = if (NotificationParser.isGenericAppName(conversationTitle)) lineSender else conversationTitle,
+                    threadDisplayName = if (NotificationParser.isGenericAppName(cleanConvTitle)) lineSender else cleanConvTitle,
                     senderName = lineSender,
                     rawText = lineMsg,
                     timestamp = sbn.postTime,
@@ -190,8 +206,28 @@ class RecoveryNotificationListener : NotificationListenerService() {
             return
         }
 
-        // Parse Sender & Message (handles "Ali: hello" when title is "WhatsApp")
-        val (finalSender, finalText) = NotificationParser.extractSenderAndMessage(conversationTitle, rawText)
+        // Drop pure summary count notifications like "5 new messages"
+        if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0 &&
+            rawText.matches(Regex("""^\d+\s+(?:new\s+)?messages?$""", RegexOption.IGNORE_CASE))
+        ) {
+            Log.d(TAG, "Dropped pure group summary count notification: $rawText")
+            return
+        }
+
+        val cleanConvTitle = NotificationParser.sanitizeThreadTitle(conversationTitle)
+
+        // Parse Sender & Message (handles "Ali: hello" when title is "WhatsApp", or group summary lines)
+        val (extractedSender, finalText) = NotificationParser.extractSenderAndMessage(
+            title = cleanConvTitle,
+            text = rawText,
+            isGroup = isGroup
+        )
+        val finalSender = senderFromTitle ?: extractedSender
+        val threadDisplayName = if (isGroup && !NotificationParser.isGenericAppName(cleanConvTitle)) {
+            cleanConvTitle
+        } else {
+            finalSender
+        }
 
         if (NotificationParser.isInvalidTitle(finalSender)) {
             Log.d(TAG, "Dropped fallback notification with invalid sender: '$finalSender' for $packageName")
@@ -205,7 +241,7 @@ class RecoveryNotificationListener : NotificationListenerService() {
 
         handleMessageOrDeletion(
             packageName = packageName,
-            threadDisplayName = finalSender,
+            threadDisplayName = threadDisplayName,
             senderName = finalSender,
             rawText = finalText,
             timestamp = sbn.postTime,
@@ -271,7 +307,8 @@ class RecoveryNotificationListener : NotificationListenerService() {
         timestamp: Long,
         hasAttachment: Boolean
     ) {
-        val cleanThreadTitle = if (NotificationParser.isGenericAppName(threadDisplayName)) senderName else threadDisplayName
+        val sanitized = NotificationParser.sanitizeThreadTitle(threadDisplayName)
+        val cleanThreadTitle = if (NotificationParser.isGenericAppName(sanitized)) senderName else sanitized
         if (cleanThreadTitle.isBlank() || NotificationParser.isInvalidTitle(cleanThreadTitle)) {
             Log.d(TAG, "Skipping message with invalid thread title: '$cleanThreadTitle'")
             return
@@ -279,20 +316,36 @@ class RecoveryNotificationListener : NotificationListenerService() {
 
         val threadId = "${packageName}_$cleanThreadTitle"
 
-        if (isDeletionNotification(packageName, rawText)) {
+        // Strip sender prefix if text contains "Sender: message" or "~ Sender: message"
+        var cleanMsgText = rawText.trim()
+        val cleanSender = senderName.removePrefix("~").trim()
+        if (cleanSender.isNotEmpty()) {
+            val prefix1 = "$cleanSender:"
+            val prefix2 = "~ $cleanSender:"
+            val prefix3 = "~$cleanSender:"
+            if (cleanMsgText.startsWith(prefix1, ignoreCase = true)) {
+                cleanMsgText = cleanMsgText.substring(prefix1.length).trim()
+            } else if (cleanMsgText.startsWith(prefix2, ignoreCase = true)) {
+                cleanMsgText = cleanMsgText.substring(prefix2.length).trim()
+            } else if (cleanMsgText.startsWith(prefix3, ignoreCase = true)) {
+                cleanMsgText = cleanMsgText.substring(prefix3.length).trim()
+            }
+        }
+
+        if (isDeletionNotification(packageName, cleanMsgText)) {
             Log.d(TAG, "Unsend/Deletion detected in $packageName for sender '$senderName'. Invoking recordDeletionEvent on thread [$threadId]")
             messageRepository.recordDeletionEvent(
                 packageName = packageName,
                 threadId = threadId,
-                senderName = senderName
+                senderName = cleanSender.ifEmpty { senderName }
             )
         } else {
             recordMessage(
                 packageName = packageName,
                 threadId = threadId,
                 displayName = cleanThreadTitle,
-                senderName = senderName,
-                rawText = rawText,
+                senderName = cleanSender.ifEmpty { senderName },
+                rawText = cleanMsgText,
                 timestamp = timestamp,
                 hasAttachment = hasAttachment
             )

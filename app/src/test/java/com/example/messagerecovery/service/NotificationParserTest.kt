@@ -109,4 +109,61 @@ class NotificationParserTest {
         assertEquals("DOCUMENT", MediaVaultCloner.resolveMimeType("pdf"))
         assertEquals("UNKNOWN", MediaVaultCloner.resolveMimeType("xyz"))
     }
+
+    @Test
+    fun sanitizeThreadTitle_stripsMessageCounts() {
+        assertEquals("Dev team. Android 🧑‍💻👩‍💻", NotificationParser.sanitizeThreadTitle("Dev team. Android 🧑‍💻👩‍💻 (5 messages)"))
+        assertEquals("Dev team. Android 🧑‍💻👩‍💻", NotificationParser.sanitizeThreadTitle("Dev team. Android 🧑‍💻👩‍💻 (2 new messages)"))
+        assertEquals("Dev team. Android 🧑‍💻👩‍💻", NotificationParser.sanitizeThreadTitle("Dev team. Android 🧑‍💻👩‍💻 (3)"))
+        assertEquals("Techsasoft : HealthCare", NotificationParser.sanitizeThreadTitle("Techsasoft : HealthCare"))
+    }
+
+    @Test
+    fun extractSenderAndGroupTitle_parsesSenderAtGroup() {
+        val (sender, group) = NotificationParser.extractSenderAndGroupTitle("Faizan TechSaSoft @ Techsasoft : HealthCare")
+        assertEquals("Faizan TechSaSoft", sender)
+        assertEquals("Techsasoft : HealthCare", group)
+
+        val (sender2, group2) = NotificationParser.extractSenderAndGroupTitle("Dev team. Android 🧑‍💻👩‍💻 (4 messages)")
+        assertEquals(null, sender2)
+        assertEquals("Dev team. Android 🧑‍💻👩‍💻", group2)
+    }
+
+    @Test
+    fun extractSenderAndMessage_splitsGroupParticipantPrefix() {
+        val (sender1, msg1) = NotificationParser.extractSenderAndMessage(
+            title = "AL-NEEL Branch-02",
+            text = "~ Mujeeb Ur Rehman: 📷 Sent a photo",
+            isGroup = true
+        )
+        assertEquals("Mujeeb Ur Rehman", sender1)
+        assertEquals("📷 Sent a photo", msg1)
+
+        val (sender2, msg2) = NotificationParser.extractSenderAndMessage(
+            title = "Dev team. Android",
+            text = "Farhan TechSaSoft: Net gya",
+            isGroup = true
+        )
+        assertEquals("Farhan TechSaSoft", sender2)
+        assertEquals("Net gya", msg2)
+    }
+
+    @Test
+    fun deduplicationEngine_matchesChildAndSummaryMessages() {
+        val childHash = com.example.messagerecovery.domain.deduplication.DeduplicationEngine.computeHash(
+            packageName = "com.whatsapp",
+            threadId = "com.whatsapp_AL-NEEL Branch-02",
+            senderName = "~ Mujeeb Ur Rehman",
+            rawText = "📷 Sent a photo"
+        )
+
+        val summaryHash = com.example.messagerecovery.domain.deduplication.DeduplicationEngine.computeHash(
+            packageName = "com.whatsapp",
+            threadId = "com.whatsapp_AL-NEEL Branch-02 (2 messages)",
+            senderName = "Mujeeb Ur Rehman",
+            rawText = "~ Mujeeb Ur Rehman: 📷 Sent a photo"
+        )
+
+        assertEquals(childHash, summaryHash)
+    }
 }

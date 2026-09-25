@@ -10,8 +10,12 @@ import com.example.messagerecovery.domain.deduplication.DeduplicationEngine
 import com.example.messagerecovery.domain.model.ChatThread
 import com.example.messagerecovery.domain.model.RecoveredMessage
 import com.example.messagerecovery.domain.repository.MessageRepository
+import com.example.messagerecovery.utils.NotificationParser
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -21,6 +25,38 @@ class MessageRepositoryImpl @Inject constructor(
     private val messageDao: MessageDao,
     private val attachmentDao: AttachmentDao
 ) : MessageRepository {
+
+    init {
+        CoroutineScope(Dispatchers.IO).launch {
+            consolidateRedundantThreads()
+        }
+    }
+
+    private suspend fun consolidateRedundantThreads() {
+        try {
+            val allThreads = threadDao.getAllThreads()
+            for (thread in allThreads) {
+                val cleanTitle = NotificationParser.sanitizeThreadTitle(thread.displayName)
+                val canonicalThreadId = "${thread.packageName}_$cleanTitle"
+                if (thread.id != canonicalThreadId) {
+                    Log.d(TAG, "Consolidating redundant thread [${thread.id}] into [$canonicalThreadId]")
+                    // 1. Delete conflicting messages from old thread
+                    threadDao.deleteConflictingMessagesBeforeMerge(thread.id, canonicalThreadId)
+                    // 2. Ensure canonical thread exists
+                    val existing = threadDao.getThreadById(canonicalThreadId)
+                    if (existing == null) {
+                        threadDao.upsertThread(thread.copy(id = canonicalThreadId, displayName = cleanTitle))
+                    }
+                    // 3. Reassign remaining messages to canonical thread
+                    threadDao.reassignMessagesToThread(thread.id, canonicalThreadId)
+                    // 4. Delete old redundant thread
+                    threadDao.deleteThreadById(thread.id)
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error consolidating redundant threads", e)
+        }
+    }
 
     override fun getThreadsFlow(): Flow<List<ChatThread>> =
         threadDao.getThreadsFlow().map { entities ->

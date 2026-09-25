@@ -29,4 +29,13 @@ interface ThreadDao {
 
     @Query("DELETE FROM threads WHERE id = :threadId")
     suspend fun deleteThreadById(threadId: String)
+
+    @Query("SELECT * FROM threads")
+    suspend fun getAllThreads(): List<ThreadEntity>
+
+    @Query("DELETE FROM messages WHERE thread_id = :oldThreadId AND dedup_hash IN (SELECT dedup_hash FROM messages WHERE thread_id = :canonicalThreadId)")
+    suspend fun deleteConflictingMessagesBeforeMerge(oldThreadId: String, canonicalThreadId: String)
+
+    @Query("UPDATE messages SET thread_id = :canonicalThreadId WHERE thread_id = :oldThreadId")
+    suspend fun reassignMessagesToThread(oldThreadId: String, canonicalThreadId: String)
 }
