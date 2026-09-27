@@ -77,7 +77,13 @@ class RecoveryNotificationListener : NotificationListenerService() {
             return
         }
 
-        // 2. Reject notifications with progress indicators (file transfer progress)
+        // 2. Gate on notification category (reject progress, service, call, etc.)
+        if (!NotificationParser.isAllowedCategory(notification.category)) {
+            Log.d(TAG, "Dropped notification with non-message category: ${notification.category} for $packageName")
+            return
+        }
+
+        // 3. Reject notifications with progress indicators (file transfer progress)
         val extras = notification.extras ?: return
         /*if (extras.containsKey(Notification.EXTRA_PROGRESS) ||
             extras.getInt(Notification.EXTRA_PROGRESS_MAX, 0) > 0
@@ -85,12 +91,6 @@ class RecoveryNotificationListener : NotificationListenerService() {
             Log.d(TAG, "Dropped progress notification from $packageName")
             return
         }*/
-
-        // 3. Gate on notification category (reject progress, service, call, etc.)
-        if (!NotificationParser.isAllowedCategory(notification.category)) {
-            Log.d(TAG, "Dropped notification with non-message category: ${notification.category} for $packageName")
-            return
-        }
 
         // Extract base titles and text safely as CharSequence
         val rawConvTitle = extras.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)?.toString()?.trim()
@@ -100,9 +100,11 @@ class RecoveryNotificationListener : NotificationListenerService() {
 
         val (senderFromTitle, groupFromTitle) = NotificationParser.extractSenderAndGroupTitle(rawTitle)
         val conversationTitle = when {
-            !rawConvTitle.isNullOrEmpty() -> NotificationParser.sanitizeThreadTitle(rawConvTitle)
-            groupFromTitle.isNotBlank() -> groupFromTitle
-            else -> NotificationParser.sanitizeThreadTitle(rawTitle)
+            !rawConvTitle.isNullOrEmpty() && !NotificationParser.isGenericAppName(rawConvTitle) ->
+                NotificationParser.resolveCanonicalGroupName(rawConvTitle)
+            groupFromTitle.isNotBlank() && !NotificationParser.isGenericAppName(groupFromTitle) ->
+                groupFromTitle
+            else -> NotificationParser.resolveCanonicalGroupName(rawTitle)
         }
 
         val messagingStyle = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)
@@ -110,14 +112,17 @@ class RecoveryNotificationListener : NotificationListenerService() {
                 !rawConvTitle.isNullOrEmpty() ||
                 senderFromTitle != null
 
-        // Attempt 1: AndroidX MessagingStyle extraction
+        // AndroidX MessagingStyle extraction
         if (messagingStyle != null && messagingStyle.messages.isNotEmpty()) {
-            val styleTitle = messagingStyle.conversationTitle?.toString()?.trim()
-                ?: conversationTitle
-            val cleanStyleTitle = NotificationParser.sanitizeThreadTitle(styleTitle)
-            val threadTitle = if (NotificationParser.isGenericAppName(cleanStyleTitle)) {
-                messagingStyle.messages.firstOrNull()?.person?.name?.toString()?.trim() ?: cleanStyleTitle
-            } else cleanStyleTitle
+            val rawStyleTitle = messagingStyle.conversationTitle?.toString()?.trim()
+            val styleTitle = if (!rawStyleTitle.isNullOrEmpty()) {
+                NotificationParser.resolveCanonicalGroupName(rawStyleTitle)
+            } else {
+                conversationTitle
+            }
+            val threadTitle = if (NotificationParser.isGenericAppName(styleTitle)) {
+                messagingStyle.messages.firstOrNull()?.person?.name?.toString()?.trim() ?: styleTitle
+            } else styleTitle
 
             for (msg in messagingStyle.messages) {
                 val rawText = msg.text?.toString()?.trim() ?: ""
@@ -143,10 +148,10 @@ class RecoveryNotificationListener : NotificationListenerService() {
             return
         }
 
-        // Attempt 2: Framework EXTRA_MESSAGES parcels (Native WhatsApp/AOSP MessagingStyle)
+        // Framework EXTRA_MESSAGES parcels (Native WhatsApp/AOSP MessagingStyle)
         val frameworkMessages = extractFrameworkMessages(extras, conversationTitle, sbn.postTime)
         if (frameworkMessages.isNotEmpty()) {
-            val cleanConvTitle = NotificationParser.sanitizeThreadTitle(conversationTitle)
+            val cleanConvTitle = NotificationParser.resolveCanonicalGroupName(conversationTitle)
             val threadTitle = if (NotificationParser.isGenericAppName(cleanConvTitle)) {
                 frameworkMessages.first().senderName
             } else cleanConvTitle
@@ -169,10 +174,18 @@ class RecoveryNotificationListener : NotificationListenerService() {
             return
         }
 
+        // Guard against processing group summaries in fallback paths.
+        // Individual messages have already been handled via per-message notifications.
+        val isGroupSummary = (notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0
+        if (isGroupSummary) {
+            Log.d(TAG, "Skipping group summary notification for $packageName — individual messages already processed")
+            return
+        }
+
         // Attempt 3: InboxStyle EXTRA_TEXT_LINES (Older bundles or group summaries)
         val textLines = extras.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
         if (!textLines.isNullOrEmpty()) {
-            val cleanConvTitle = NotificationParser.sanitizeThreadTitle(conversationTitle)
+            val cleanConvTitle = NotificationParser.resolveCanonicalGroupName(conversationTitle)
             for (line in textLines) {
                 val lineStr = line?.toString()?.trim() ?: continue
                 if (lineStr.isEmpty()) continue
@@ -197,7 +210,7 @@ class RecoveryNotificationListener : NotificationListenerService() {
             return
         }
 
-        // Attempt 4: Fallback Single Notification (Instagram Direct, Messenger, Standard notifications)
+        // Fallback Single Notification (Instagram Direct, Messenger, Standard notifications)
         val rawText = (extras.getCharSequence(Notification.EXTRA_BIG_TEXT)
             ?: extras.getCharSequence(Notification.EXTRA_TEXT)
             ?: extras.getCharSequence(Notification.EXTRA_SUMMARY_TEXT))?.toString()?.trim() ?: ""
@@ -206,15 +219,7 @@ class RecoveryNotificationListener : NotificationListenerService() {
             return
         }
 
-        // Drop pure summary count notifications like "5 new messages"
-        if ((notification.flags and Notification.FLAG_GROUP_SUMMARY) != 0 &&
-            rawText.matches(Regex("""^\d+\s+(?:new\s+)?messages?$""", RegexOption.IGNORE_CASE))
-        ) {
-            Log.d(TAG, "Dropped pure group summary count notification: $rawText")
-            return
-        }
-
-        val cleanConvTitle = NotificationParser.sanitizeThreadTitle(conversationTitle)
+        val cleanConvTitle = NotificationParser.resolveCanonicalGroupName(conversationTitle)
 
         // Parse Sender & Message (handles "Ali: hello" when title is "WhatsApp", or group summary lines)
         val (extractedSender, finalText) = NotificationParser.extractSenderAndMessage(

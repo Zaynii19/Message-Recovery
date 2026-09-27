@@ -2,15 +2,10 @@ package com.example.messagerecovery.service
 
 import android.app.Service
 import android.content.Intent
-import android.database.ContentObserver
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.FileObserver
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
-import android.provider.MediaStore
 import android.util.Log
 import com.example.messagerecovery.domain.repository.MediaVaultRepository
 import com.example.messagerecovery.utils.MediaVaultCloner
@@ -35,7 +30,6 @@ class MediaFileObserverService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val activeObservers = mutableListOf<FileObserver>()
     private val watchedDirectories = ConcurrentHashMap.newKeySet<String>()
-    private var mediaContentObserver: ContentObserver? = null
     private val recentlyProcessedPaths = ConcurrentHashMap<String, Long>()
 
     private fun shouldProcessPath(path: String): Boolean {
@@ -57,7 +51,6 @@ class MediaFileObserverService : Service() {
     override fun onCreate() {
         super.onCreate()
         initializeDirectoryObservers()
-        initializeMediaStoreObserver()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -227,95 +220,11 @@ class MediaFileObserverService : Service() {
         return file.exists() && file.length() > 0L
     }
 
-    private fun initializeMediaStoreObserver() {
-        val handler = Handler(Looper.getMainLooper())
-        mediaContentObserver = object : ContentObserver(handler) {
-            override fun onChange(selfChange: Boolean, uri: Uri?) {
-                super.onChange(selfChange, uri)
-                uri ?: return
-                // Backup capture route when MediaStore emits new image/video creation
-                serviceScope.launch {
-                    processMediaStoreUri(uri)
-                }
-            }
-        }
-
-        contentResolver.registerContentObserver(
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-            true,
-            mediaContentObserver!!
-        )
-        contentResolver.registerContentObserver(
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
-            true,
-            mediaContentObserver!!
-        )
-        contentResolver.registerContentObserver(
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            true,
-            mediaContentObserver!!
-        )
-    }
-
-    private fun resolvePackageFromPath(path: String): String? {
-        val lower = path.lowercase()
-        return when {
-            lower.contains("com.whatsapp.w4b") || lower.contains("whatsapp business") -> RecoveryNotificationListener.PKG_WHATSAPP_BUSINESS
-            lower.contains("com.whatsapp") || lower.contains("/whatsapp/") -> RecoveryNotificationListener.PKG_WHATSAPP
-            lower.contains("com.facebook.orca") || lower.contains("/messenger/") -> RecoveryNotificationListener.PKG_MESSENGER
-            lower.contains("com.instagram.android") || lower.contains("/instagram/") -> RecoveryNotificationListener.PKG_INSTAGRAM
-            else -> null
-        }
-    }
-
-    private suspend fun processMediaStoreUri(uri: Uri) {
-        try {
-            val projection = arrayOf(
-                MediaStore.MediaColumns.DATA,
-                MediaStore.MediaColumns.OWNER_PACKAGE_NAME
-            )
-            contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val dataIndex = cursor.getColumnIndex(MediaStore.MediaColumns.DATA)
-                    val pkgIndex = cursor.getColumnIndex(MediaStore.MediaColumns.OWNER_PACKAGE_NAME)
-
-                    val path = if (dataIndex != -1) cursor.getString(dataIndex) else null
-                    val pkg = if (pkgIndex != -1) cursor.getString(pkgIndex) else null
-
-                    val resolvedPkg = (if (pkg in RecoveryNotificationListener.TARGET_PACKAGES) pkg else null)
-                        ?: (if (path != null) resolvePackageFromPath(path) else null)
-
-                    if (path != null && resolvedPkg != null) {
-                        val file = File(path)
-                        if (!shouldProcessPath(path)) {
-                            return
-                        }
-
-                        if (waitForFileStabilization(file)) {
-                            MediaVaultCloner.cloneToVault(
-                                context = this@MediaFileObserverService,
-                                sourceFile = file,
-                                packageName = resolvedPkg,
-                                mediaVaultRepository = mediaVaultRepository
-                            )
-                        }
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error querying MediaStore URI $uri", e)
-        }
-    }
-
     override fun onDestroy() {
         super.onDestroy()
         Log.w(TAG, "MediaFileObserverService stopping all ${activeObservers.size} active observers")
         activeObservers.forEach { it.stopWatching() }
         activeObservers.clear()
-
-        mediaContentObserver?.let {
-            contentResolver.unregisterContentObserver(it)
-        }
         serviceScope.cancel()
     }
 
@@ -323,6 +232,6 @@ class MediaFileObserverService : Service() {
 
     companion object {
         private const val TAG = "MediaObserverService"
-        private const val DEBOUNCE_TTL_MS = 3000L
+        private const val DEBOUNCE_TTL_MS = 10000L
     }
 }

@@ -28,6 +28,7 @@ class MessageRepositoryImpl @Inject constructor(
 
     init {
         CoroutineScope(Dispatchers.IO).launch {
+            // Run once at startup to clean up any bad threads persisted before this fix
             consolidateRedundantThreads()
         }
     }
@@ -77,30 +78,47 @@ class MessageRepositoryImpl @Inject constructor(
         thread: ChatThread,
         message: RecoveredMessage
     ): Boolean {
-        // Step 1: Memory Deduplication Check
-        if (DeduplicationEngine.isDuplicateOrRecord(message.dedupHash)) {
-            Log.d(TAG, "Dropped duplicate message via in-memory LRU cache: hash=${message.dedupHash}")
+        // Step 1: Canonicalize thread ID/name to strip count-suffix variants like "Dev team (5 messages)"
+        // This ensures threads are ALWAYS keyed by their clean name, preventing duplicate rows.
+        val canonicalDisplayName = NotificationParser.sanitizeThreadTitle(thread.displayName)
+        val canonicalThreadId = "${thread.packageName}_$canonicalDisplayName"
+        val canonicalThread = if (canonicalThreadId != thread.id || canonicalDisplayName != thread.displayName) {
+            Log.d(TAG, "Canonicalized thread: [${thread.id}] -> [$canonicalThreadId] (display: '${thread.displayName}' -> '$canonicalDisplayName')")
+            thread.copy(id = canonicalThreadId, displayName = canonicalDisplayName)
+        } else {
+            thread
+        }
+        // Also point the message to the canonical thread
+        val canonicalMessage = if (message.threadId != canonicalThreadId) {
+            message.copy(threadId = canonicalThreadId)
+        } else {
+            message
+        }
+
+        // Step 2: Memory Deduplication Check
+        if (DeduplicationEngine.isDuplicateOrRecord(canonicalMessage.dedupHash)) {
+            Log.d(TAG, "Dropped duplicate message via in-memory LRU cache: hash=${canonicalMessage.dedupHash}")
             return false // Duplicate dropped
         }
 
-        // Step 2: Atomic Thread Upsert
-        threadDao.upsertThread(thread.toEntity())
+        // Step 3: Atomic Thread Upsert (always uses canonical ID)
+        threadDao.upsertThread(canonicalThread.toEntity())
 
-        // Step 3: Insert Message with SQLite UNIQUE Conflict Guard
-        val rowId = messageDao.insertMessage(message.toEntity())
+        // Step 4: Insert Message with SQLite UNIQUE Conflict Guard
+        val rowId = messageDao.insertMessage(canonicalMessage.toEntity())
         if (rowId == -1L) {
-            Log.d(TAG, "SQLite UNIQUE conflict guard prevented duplicate row insertion: hash=${message.dedupHash}")
+            Log.d(TAG, "SQLite UNIQUE conflict guard prevented duplicate row insertion: hash=${canonicalMessage.dedupHash}")
             return false // SQLite UNIQUE constraint prevented duplicate insertion
         }
 
-        Log.d(TAG, "Recorded message in Room: rowId=$rowId, thread=[${thread.id}], sender='${message.senderName}', text=${message.rawText.take(40)}")
+        Log.d(TAG, "Recorded message in Room: rowId=$rowId, thread=[$canonicalThreadId], sender='${canonicalMessage.senderName}', text=${canonicalMessage.rawText.take(40)}")
 
-        // Step 4: Asynchronous Late-Binding with Orphaned Media (Proximity ±5s)
+        // Step 5: Asynchronous Late-Binding with Orphaned Media (Proximity ±5s)
         val proximityWindow = 5000L
         val nearbyAttachment = attachmentDao.findUnlinkedAttachmentNearTime(
-            packageName = thread.packageName,
-            startTime = message.timestamp - proximityWindow,
-            endTime = message.timestamp + proximityWindow
+            packageName = canonicalThread.packageName,
+            startTime = canonicalMessage.timestamp - proximityWindow,
+            endTime = canonicalMessage.timestamp + proximityWindow
         )
         if (nearbyAttachment != null) {
             Log.d(TAG, "Correlated orphaned media attachment [id=${nearbyAttachment.id}] with message [$rowId]")

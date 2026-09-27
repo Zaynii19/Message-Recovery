@@ -10,10 +10,25 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.LinkedHashSet
 import java.util.UUID
 
 object MediaVaultCloner {
     private const val TAG = "MediaVaultCloner"
+
+    private val processedHashes = Collections.synchronizedSet(object : LinkedHashSet<String>() {
+        override fun add(element: String): Boolean {
+            if (size > 2000) {
+                val iterator = iterator()
+                if (iterator.hasNext()) {
+                    iterator.next()
+                    iterator.remove()
+                }
+            }
+            return super.add(element)
+        }
+    })
 
     /**
      * Clones an external source file into the protected sandbox directory (context.filesDir/vault/)
@@ -29,8 +44,16 @@ object MediaVaultCloner {
             return@withContext null
         }
 
+        var computedHash: String? = null
         try {
             val contentHash = computeFileSha256(sourceFile)
+            computedHash = contentHash
+
+            if (!processedHashes.add(contentHash)) {
+                Log.d(TAG, "Session dedup guard: hash $contentHash already processed this session (${sourceFile.name})")
+                return@withContext null
+            }
+
             if (mediaVaultRepository.existsByContentHash(contentHash)) {
                 Log.d(TAG, "Skipping duplicate media file by SHA-256 hash: $contentHash (${sourceFile.name})")
                 return@withContext null
@@ -76,6 +99,7 @@ object MediaVaultCloner {
             return@withContext attachment.copy(id = recordId)
         } catch (e: Exception) {
             Log.e(TAG, "Failed to clone file ${sourceFile.absolutePath} to vault", e)
+            computedHash?.let { processedHashes.remove(it) }
             return@withContext null
         }
     }

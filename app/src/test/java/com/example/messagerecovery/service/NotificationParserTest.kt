@@ -166,4 +166,14 @@ class NotificationParserTest {
 
         assertEquals(childHash, summaryHash)
     }
+
+    @Test
+    fun resolveCanonicalGroupName_resolvesCleanGroupName() {
+        assertEquals("Punjabain 2k20", NotificationParser.resolveCanonicalGroupName("Farukh @ Punjabain 2k20"))
+        assertEquals("Punjabain 2k20", NotificationParser.resolveCanonicalGroupName("Farukh @ Punjabain 2k20 (5 messages)"))
+        assertEquals("Punjabain 2k20", NotificationParser.resolveCanonicalGroupName("Punjabain 2k20 (5 messages)"))
+        assertEquals("Dev team. Android", NotificationParser.resolveCanonicalGroupName("Dev team. Android (3)"))
+        assertEquals("John Doe", NotificationParser.resolveCanonicalGroupName("John Doe"))
+        assertEquals("Techsasoft : HealthCare", NotificationParser.resolveCanonicalGroupName("Faizan TechSaSoft @ Techsasoft : HealthCare"))
+    }
 }

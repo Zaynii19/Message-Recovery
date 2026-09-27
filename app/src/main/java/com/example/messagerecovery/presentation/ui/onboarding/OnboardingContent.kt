@@ -212,7 +212,7 @@ fun OnboardingContent(
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
-                    text = if (state.allGranted) "ENTER DASHBOARD" else "ACTIVATE ALL 4 PERMISSIONS TO UNLOCK",
+                    text = if (state.allGranted) "ENTER DASHBOARD" else "ACTIVATE ALL 3 PERMISSIONS TO UNLOCK",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                 )
             }

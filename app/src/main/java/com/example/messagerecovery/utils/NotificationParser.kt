@@ -47,6 +47,16 @@ object NotificationParser {
     }
 
     /**
+     * Given a raw notification title (possibly "Sender @ Group" or "Group (5 messages)"),
+     * returns just the canonical group/contact name.
+     */
+    fun resolveCanonicalGroupName(rawTitle: String): String {
+        val sanitized = sanitizeThreadTitle(rawTitle)
+        val (_, group) = extractSenderAndGroupTitle(sanitized)
+        return group.trim()
+    }
+
+    /**
      * Parses titles formatted as "Sender @ GroupName" in group notifications.
      * Returns Pair(SenderName?, CleanGroupName).
      */
