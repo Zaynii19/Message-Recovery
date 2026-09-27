@@ -1,8 +1,9 @@
 package com.example.messagerecovery.presentation.navigation
 
+import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
 
-sealed interface ScreenDestination {
+sealed interface ScreenDestination : NavKey {
     @Serializable
     data object Onboarding : ScreenDestination
 

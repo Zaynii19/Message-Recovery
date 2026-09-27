@@ -1,24 +1,26 @@
 package com.example.messagerecovery.presentation.navigation
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.navigation3.runtime.entryProvider
+import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.ui.NavDisplay
 import com.example.messagerecovery.presentation.ui.conversation.ConversationScreen
 import com.example.messagerecovery.presentation.ui.dashboard.DashboardScreen
 import com.example.messagerecovery.presentation.ui.onboarding.OnboardingScreen
 import com.example.messagerecovery.utils.PermissionManager
 
 @Composable
-fun AppNavGraph(
-    modifier: Modifier = Modifier
-) {
+fun AppNavGraph() {
     val context = LocalContext.current
     val initialDestination = remember {
         if (PermissionManager.areAllRequiredPermissionsGranted(context)) {
@@ -28,39 +30,62 @@ fun AppNavGraph(
         }
     }
 
-    var currentDestination by remember { mutableStateOf(initialDestination) }
+    val backStack = rememberNavBackStack(initialDestination)
 
-    Crossfade(
-        targetState = currentDestination,
-        modifier = modifier.fillMaxSize(),
-        label = "NavTransition"
-    ) { destination ->
-        when (destination) {
-            is ScreenDestination.Onboarding -> {
+    NavDisplay(
+        backStack = backStack,
+        modifier = Modifier.fillMaxSize(),
+        onBack = {
+            if (backStack.size > 1) {
+                backStack.removeLastOrNull()
+            }
+        },
+        transitionSpec = {
+            slideInHorizontally(
+                initialOffsetX = { fullWidth -> fullWidth },
+                animationSpec = tween(300)
+            ) + fadeIn(animationSpec = tween(300)) togetherWith
+                slideOutHorizontally(
+                    targetOffsetX = { fullWidth -> -fullWidth / 3 },
+                    animationSpec = tween(300)
+                ) + fadeOut(animationSpec = tween(300))
+        },
+        popTransitionSpec = {
+            slideInHorizontally(
+                initialOffsetX = { fullWidth -> -fullWidth / 3 },
+                animationSpec = tween(300)
+            ) + fadeIn(animationSpec = tween(300)) togetherWith
+                slideOutHorizontally(
+                    targetOffsetX = { fullWidth -> fullWidth },
+                    animationSpec = tween(300)
+                ) + fadeOut(animationSpec = tween(300))
+        },
+        entryProvider = entryProvider {
+            entry<ScreenDestination.Onboarding> {
                 OnboardingScreen(
                     onNavigateToDashboard = {
-                        currentDestination = ScreenDestination.MainDashboard()
+                        backStack.clear()
+                        backStack.add(ScreenDestination.MainDashboard())
                     }
                 )
             }
-            is ScreenDestination.MainDashboard -> {
+            entry<ScreenDestination.MainDashboard> {
                 DashboardScreen(
                     onNavigateToConversation = { threadId ->
-                        currentDestination = ScreenDestination.Conversation(threadId)
+                        backStack.add(ScreenDestination.Conversation(threadId))
                     }
                 )
             }
-            is ScreenDestination.Conversation -> {
-                BackHandler {
-                    currentDestination = ScreenDestination.MainDashboard()
-                }
+            entry<ScreenDestination.Conversation> { key ->
                 ConversationScreen(
-                    threadId = destination.threadId,
+                    threadId = key.threadId,
                     onNavigateBack = {
-                        currentDestination = ScreenDestination.MainDashboard()
+                        if (backStack.size > 1) {
+                            backStack.removeLastOrNull()
+                        }
                     }
                 )
             }
         }
-    }
+    )
 }
