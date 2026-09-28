@@ -1,6 +1,7 @@
 package com.example.messagerecovery.presentation.ui.gallery
 
 import android.content.Intent
+import android.util.Log
 import android.widget.MediaController
 import android.widget.VideoView
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -323,104 +324,13 @@ fun AttachmentGalleryContent(
         }
     }
 
-    val context = LocalContext.current
-
     // Full-screen Media Preview Dialog
     state.previewAttachment?.let { preview ->
-        val isVideo = preview.mimeType.startsWith("VIDEO")
-        val file = File(preview.vaultPath)
-
-        Dialog(
-            onDismissRequest = onClosePreview,
-            properties = DialogProperties(usePlatformDefaultWidth = false)
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(CyberObsidian)
-            ) {
-                if (isVideo) {
-                    AndroidView(
-                        factory = { ctx ->
-                            VideoView(ctx).apply {
-                                val controller = MediaController(ctx)
-                                controller.setAnchorView(this)
-                                setMediaController(controller)
-                                setVideoPath(preview.vaultPath)
-                                setOnPreparedListener { mp ->
-                                    mp.isLooping = true
-                                    start()
-                                }
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .align(Alignment.Center)
-                    )
-                } else {
-                    AsyncImage(
-                        model = file,
-                        contentDescription = "Fullscreen Media",
-                        modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.Fit
-                    )
-                }
-
-                // Top Controls
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp)
-                        .align(Alignment.TopCenter),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    IconButton(
-                        onClick = onClosePreview,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(CyberSurfaceDark.copy(alpha = 0.8f))
-                    ) {
-                        Icon(Icons.Default.Close, contentDescription = "Close", tint = TextPrimary)
-                    }
-
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        IconButton(
-                            onClick = {
-                                try {
-                                    val uri = FileProvider.getUriForFile(
-                                        context,
-                                        "${context.packageName}.fileprovider",
-                                        file
-                                    )
-                                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                                        setDataAndType(uri, if (isVideo) "video/*" else "image/*")
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                                    }
-                                    context.startActivity(Intent.createChooser(intent, "Open with"))
-                                } catch (e: Exception) {
-                                    android.util.Log.e("AttachmentGallery", "Failed to launch external player", e)
-                                }
-                            },
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(CyberSurfaceDark.copy(alpha = 0.8f))
-                        ) {
-                            Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open in External App", tint = ElectricCyan)
-                        }
-
-                        IconButton(
-                            onClick = { onExportSingle(preview) },
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(CyberSurfaceDark.copy(alpha = 0.8f))
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = "Save to Device", tint = ElectricCyan)
-                        }
-                    }
-                }
-            }
-        }
+        MediaPreviewDialog(
+            preview = preview,
+            onClosePreview = onClosePreview,
+            onExportSingle = onExportSingle
+        )
     }
 }
 
@@ -639,6 +549,152 @@ fun AttachmentGalleryContentPreview() {
             onSeekAudio = {},
             onStopAudio = {},
             onDismissMessage = {}
+        )
+    }
+}
+
+@Composable
+fun MediaPreviewDialog(
+    preview: AttachmentUiModel,
+    onClosePreview: () -> Unit,
+    onExportSingle: (AttachmentUiModel) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val isVideo = preview.mimeType.startsWith("VIDEO")
+    val file = File(preview.vaultPath)
+
+    Dialog(
+        onDismissRequest = onClosePreview,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = modifier
+                .fillMaxSize()
+                .background(CyberObsidian)
+        ) {
+            if (isVideo) {
+                AndroidView(
+                    factory = { ctx ->
+                        VideoView(ctx).apply {
+                            val controller = MediaController(ctx)
+                            controller.setAnchorView(this)
+                            setMediaController(controller)
+                            setVideoPath(preview.vaultPath)
+                            setOnPreparedListener { mp ->
+                                mp.isLooping = true
+                                start()
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .align(Alignment.Center)
+                )
+            } else {
+                AsyncImage(
+                    model = file,
+                    contentDescription = "Fullscreen Media",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+            }
+
+            // Top Controls
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+                    .align(Alignment.TopCenter),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(
+                    onClick = onClosePreview,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .background(CyberSurfaceDark.copy(alpha = 0.8f))
+                ) {
+                    Icon(Icons.Default.Close, contentDescription = "Close", tint = TextPrimary)
+                }
+
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    IconButton(
+                        onClick = {
+                            try {
+                                val uri = FileProvider.getUriForFile(
+                                    context,
+                                    "${context.packageName}.fileprovider",
+                                    file
+                                )
+                                val intent = Intent(Intent.ACTION_VIEW).apply {
+                                    setDataAndType(uri, if (isVideo) "video/*" else "image/*")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                context.startActivity(Intent.createChooser(intent, "Open with"))
+                            } catch (e: Exception) {
+                                Log.e("AttachmentGallery", "Failed to launch external player", e)
+                            }
+                        },
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(CyberSurfaceDark.copy(alpha = 0.8f))
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.OpenInNew, contentDescription = "Open in External App", tint = ElectricCyan)
+                    }
+
+                    IconButton(
+                        onClick = { onExportSingle(preview) },
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(CyberSurfaceDark.copy(alpha = 0.8f))
+                    ) {
+                        Icon(Icons.Default.Download, contentDescription = "Save to Device", tint = ElectricCyan)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Preview(showSystemUi = true)
+@Composable
+fun MediaPreviewImageDialogPreview() {
+    MessageRecoveryTheme(darkTheme = true) {
+        MediaPreviewDialog(
+            preview = AttachmentUiModel(
+                id = 1,
+                messageId = 1,
+                threadId = "wa_alice",
+                packageName = "com.whatsapp",
+                mimeType = "IMAGE",
+                vaultPath = "/vault/sample1.jpg",
+                fileSize = 1048576,
+                capturedTimestamp = System.currentTimeMillis()
+            ),
+            onClosePreview = {},
+            onExportSingle = {}
+        )
+    }
+}
+
+@Preview(showSystemUi = true)
+@Composable
+fun MediaPreviewVideoDialogPreview() {
+    MessageRecoveryTheme(darkTheme = true) {
+        MediaPreviewDialog(
+            preview = AttachmentUiModel(
+                id = 3,
+                messageId = 3,
+                threadId = "ig_charlie",
+                packageName = "com.instagram.android",
+                mimeType = "VIDEO",
+                vaultPath = "/vault/sample3.mp4",
+                fileSize = 5242880,
+                capturedTimestamp = System.currentTimeMillis()
+            ),
+            onClosePreview = {},
+            onExportSingle = {}
         )
     }
 }
