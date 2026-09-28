@@ -1,11 +1,5 @@
 package com.example.messagerecovery.presentation.navigation
 
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -39,26 +33,6 @@ fun AppNavGraph() {
             if (backStack.size > 1) {
                 backStack.removeLastOrNull()
             }
-        },
-        transitionSpec = {
-            slideInHorizontally(
-                initialOffsetX = { fullWidth -> fullWidth },
-                animationSpec = tween(300)
-            ) + fadeIn(animationSpec = tween(300)) togetherWith
-                slideOutHorizontally(
-                    targetOffsetX = { fullWidth -> -fullWidth / 3 },
-                    animationSpec = tween(300)
-                ) + fadeOut(animationSpec = tween(300))
-        },
-        popTransitionSpec = {
-            slideInHorizontally(
-                initialOffsetX = { fullWidth -> -fullWidth / 3 },
-                animationSpec = tween(300)
-            ) + fadeIn(animationSpec = tween(300)) togetherWith
-                slideOutHorizontally(
-                    targetOffsetX = { fullWidth -> fullWidth },
-                    animationSpec = tween(300)
-                ) + fadeOut(animationSpec = tween(300))
         },
         entryProvider = entryProvider {
             entry<ScreenDestination.Onboarding> {
